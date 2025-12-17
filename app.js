@@ -41,13 +41,31 @@
         mainProgressFill: document.getElementById('main-progress-fill'),
         mainProgressText: document.getElementById('main-progress-text'),
         missedDaysContainer: document.getElementById('missed-days-container'),
-        missedDaysList: document.getElementById('missed-days-list')
+        missedDaysList: document.getElementById('missed-days-list'),
+        syncExportBtn: document.getElementById('sync-export-btn'),
+        syncImportBtn: document.getElementById('sync-import-btn')
     };
 
     // Initialize
     async function init() {
         await loadReadingPlan();
-        loadState();
+
+        // Check for sync URL first (before loading local state)
+        const syncData = checkSyncURL();
+        if (syncData) {
+            // Ask user to confirm import
+            if (confirm(`Restore ${syncData.completedDays.length} days of progress from sync link?`)) {
+                state.startDate = syncData.startDate;
+                state.completedDays = syncData.completedDays;
+                saveState();
+            } else {
+                // User declined, load local state
+                loadState();
+            }
+        } else {
+            loadState();
+        }
+
         setupEventListeners();
         checkInstallStatus();
 
@@ -97,6 +115,8 @@
         elements.backBtn.addEventListener('click', hideSettings);
         elements.setReminderBtn.addEventListener('click', handleSetReminder);
         elements.resetBtn.addEventListener('click', handleReset);
+        elements.syncExportBtn.addEventListener('click', handleSyncExport);
+        elements.syncImportBtn.addEventListener('click', handleSyncImport);
 
         // Set default date to tomorrow
         const tomorrow = new Date();
@@ -460,6 +480,191 @@ END:VCALENDAR`;
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const day = String(date.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
+    }
+
+    // ============================================
+    // URL-Based Sync (Bitfield + Base64URL encoding)
+    // ============================================
+
+    /**
+     * Encode state to URL-safe string using bitfield compression
+     * Format: v1.[YYYYMMDD].[base64url-encoded-bitfield]
+     * Total size: ~70 characters regardless of progress
+     */
+    function encodeStateToURL() {
+        if (!state.startDate) return null;
+
+        // Version prefix for future compatibility
+        const version = 'v1';
+
+        // Encode start date as YYYYMMDD (8 chars)
+        const dateStr = state.startDate.toISOString().split('T')[0].replace(/-/g, '');
+
+        // Create bitfield for 365 days (46 bytes = 368 bits, covers 365 days)
+        const bitfield = new Uint8Array(46);
+
+        state.completedDays.forEach(day => {
+            if (day >= 1 && day <= 365) {
+                const byteIndex = Math.floor((day - 1) / 8);
+                const bitIndex = (day - 1) % 8;
+                bitfield[byteIndex] |= (1 << bitIndex);
+            }
+        });
+
+        // Convert to Base64URL (URL-safe)
+        const base64 = btoa(String.fromCharCode(...bitfield))
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, ''); // Remove padding
+
+        return `${version}.${dateStr}.${base64}`;
+    }
+
+    /**
+     * Decode URL string back to state
+     */
+    function decodeStateFromURL(encodedStr) {
+        try {
+            const parts = encodedStr.split('.');
+            if (parts.length !== 3 || parts[0] !== 'v1') {
+                throw new Error('Invalid sync format');
+            }
+
+            const [, dateStr, base64] = parts;
+
+            // Decode start date
+            const year = dateStr.substring(0, 4);
+            const month = dateStr.substring(4, 6);
+            const day = dateStr.substring(6, 8);
+            const startDate = new Date(`${year}-${month}-${day}T00:00:00`);
+
+            if (isNaN(startDate.getTime())) {
+                throw new Error('Invalid date');
+            }
+
+            // Decode Base64URL to bitfield
+            const base64Standard = base64
+                .replace(/-/g, '+')
+                .replace(/_/g, '/');
+
+            // Add padding if needed
+            const padding = '='.repeat((4 - base64Standard.length % 4) % 4);
+            const decoded = atob(base64Standard + padding);
+
+            const bitfield = new Uint8Array(decoded.length);
+            for (let i = 0; i < decoded.length; i++) {
+                bitfield[i] = decoded.charCodeAt(i);
+            }
+
+            // Extract completed days from bitfield
+            const completedDays = [];
+            for (let d = 1; d <= 365; d++) {
+                const byteIndex = Math.floor((d - 1) / 8);
+                const bitIndex = (d - 1) % 8;
+                if (bitfield[byteIndex] & (1 << bitIndex)) {
+                    completedDays.push(d);
+                }
+            }
+
+            return { startDate, completedDays };
+        } catch (error) {
+            console.error('Failed to decode sync data:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Generate shareable sync URL
+     */
+    function generateSyncURL() {
+        const encoded = encodeStateToURL();
+        if (!encoded) return null;
+
+        const baseURL = window.location.origin + window.location.pathname;
+        return `${baseURL}#sync=${encoded}`;
+    }
+
+    /**
+     * Check URL hash for sync data on load
+     */
+    function checkSyncURL() {
+        const hash = window.location.hash;
+        if (hash.startsWith('#sync=')) {
+            const encoded = hash.substring(6);
+            const imported = decodeStateFromURL(encoded);
+
+            if (imported) {
+                // Clear hash immediately to prevent re-importing on refresh
+                history.replaceState(null, '', window.location.pathname);
+                return imported;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Handle sync export - uses Web Share API on iOS, clipboard elsewhere
+     */
+    async function handleSyncExport() {
+        const syncURL = generateSyncURL();
+        if (!syncURL) {
+            alert('Please start the reading plan first before syncing.');
+            return;
+        }
+
+        const shareText = `Bible Reading Progress\n\nOpen this link to restore your progress:\n${syncURL}`;
+
+        // Try Web Share API (best on iOS)
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: 'Bible Reading Progress',
+                    text: shareText,
+                    url: syncURL
+                });
+                return;
+            } catch (err) {
+                if (err.name === 'AbortError') return; // User cancelled
+                // Fall through to clipboard
+            }
+        }
+
+        // Fallback to clipboard
+        try {
+            await navigator.clipboard.writeText(syncURL);
+            alert('Sync link copied to clipboard!\n\nOpen this link on another device to restore your progress.');
+        } catch (err) {
+            // Final fallback: show in prompt for manual copy
+            prompt('Copy this sync link:', syncURL);
+        }
+    }
+
+    /**
+     * Handle sync import - prompt for URL/code
+     */
+    function handleSyncImport() {
+        const input = prompt('Paste your sync link or code:');
+        if (!input) return;
+
+        // Extract encoded part from full URL or use as-is
+        let encoded = input.trim();
+        if (encoded.includes('#sync=')) {
+            encoded = encoded.split('#sync=')[1];
+        }
+
+        const imported = decodeStateFromURL(encoded);
+        if (!imported) {
+            alert('Invalid sync link or code. Please try again.');
+            return;
+        }
+
+        if (confirm(`Restore ${imported.completedDays.length} days of progress?\n\nThis will replace your current progress.`)) {
+            state.startDate = imported.startDate;
+            state.completedDays = imported.completedDays;
+            saveState();
+            alert('Progress restored successfully!');
+            location.reload();
+        }
     }
 
     // Register Service Worker

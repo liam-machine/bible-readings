@@ -596,6 +596,37 @@ html, body {
     color: var(--text-primary);
 }
 
+/* Sync Section */
+.sync-section {
+    border-left: 4px solid var(--primary-color);
+}
+
+.sync-buttons {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.sync-buttons .btn-secondary {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.btn-icon-inline {
+    font-size: 1.1rem;
+    font-weight: bold;
+}
+
+.hint-text {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-style: italic;
+    line-height: 1.4;
+}
+
 .danger-zone {
     border: 2px solid var(--danger-color);
     border-radius: var(--radius);
