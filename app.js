@@ -37,7 +37,9 @@
         progressFill: document.getElementById('progress-fill'),
         progressPercent: document.getElementById('progress-percent'),
         resetBtn: document.getElementById('reset-btn'),
-        installPrompt: document.getElementById('install-prompt')
+        installPrompt: document.getElementById('install-prompt'),
+        mainProgressFill: document.getElementById('main-progress-fill'),
+        mainProgressText: document.getElementById('main-progress-text')
     };
 
     // Initialize
@@ -238,10 +240,22 @@
         } else {
             elements.completionSection.classList.remove('hidden');
             elements.completedMessage.classList.add('hidden');
+            elements.completeBtn.disabled = false;
+        }
 
-            // Only enable complete button for today or past days
-            const todayDayNum = getDayNumber(new Date());
-            elements.completeBtn.disabled = state.currentViewDay > todayDayNum;
+        // Update main screen progress bar
+        updateMainProgressBar();
+    }
+
+    function updateMainProgressBar() {
+        const completed = state.completedDays.length;
+        const percent = Math.round((completed / 365) * 100);
+
+        if (elements.mainProgressFill) {
+            elements.mainProgressFill.style.width = `${percent}%`;
+        }
+        if (elements.mainProgressText) {
+            elements.mainProgressText.textContent = `${completed}/365 days (${percent}%)`;
         }
     }
 
