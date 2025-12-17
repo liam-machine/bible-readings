@@ -39,7 +39,9 @@
         resetBtn: document.getElementById('reset-btn'),
         installPrompt: document.getElementById('install-prompt'),
         mainProgressFill: document.getElementById('main-progress-fill'),
-        mainProgressText: document.getElementById('main-progress-text')
+        mainProgressText: document.getElementById('main-progress-text'),
+        missedDaysContainer: document.getElementById('missed-days-container'),
+        missedDaysList: document.getElementById('missed-days-list')
     };
 
     // Initialize
@@ -221,6 +223,10 @@
         // Update nav buttons
         elements.prevDayBtn.disabled = dayNum <= 1;
         elements.nextDayBtn.disabled = dayNum >= 365;
+
+        // Update Today button and missed days
+        updateTodayButton();
+        updateMissedDaysDisplay();
     }
 
     function formatReading(reading) {
@@ -288,6 +294,62 @@
         }
 
         return streak;
+    }
+
+    // Get missed days (past days that weren't completed)
+    function getMissedDays() {
+        const todayDayNum = getDayNumber(new Date());
+        const missed = [];
+
+        // Check all days from day 1 up to yesterday
+        for (let day = 1; day < todayDayNum && day <= 365; day++) {
+            if (!state.completedDays.includes(day)) {
+                missed.push(day);
+            }
+        }
+
+        return missed;
+    }
+
+    // Update missed days display
+    function updateMissedDaysDisplay() {
+        const missed = getMissedDays();
+
+        if (missed.length === 0) {
+            elements.missedDaysContainer.classList.add('hidden');
+            return;
+        }
+
+        elements.missedDaysContainer.classList.remove('hidden');
+
+        // Show up to 7 most recent missed days
+        const recentMissed = missed.slice(-7);
+        const hasMore = missed.length > 7;
+
+        elements.missedDaysList.innerHTML = recentMissed
+            .map(day => `<button class="missed-day-chip" data-day="${day}">Day ${day}</button>`)
+            .join('') + (hasMore ? `<span class="missed-more">+${missed.length - 7} more</span>` : '');
+
+        // Add click handlers
+        elements.missedDaysList.querySelectorAll('.missed-day-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const day = parseInt(chip.dataset.day);
+                state.currentViewDay = day;
+                updateReadingDisplay();
+            });
+        });
+    }
+
+    // Update Today button text
+    function updateTodayButton() {
+        const todayDayNum = getDayNumber(new Date());
+        if (todayDayNum >= 1 && todayDayNum <= 365) {
+            elements.todayBtn.textContent = `Today (Day ${todayDayNum})`;
+        } else if (todayDayNum < 1) {
+            elements.todayBtn.textContent = 'Not Started';
+        } else {
+            elements.todayBtn.textContent = 'Complete!';
+        }
     }
 
     // Handle Complete

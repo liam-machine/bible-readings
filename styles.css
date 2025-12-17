@@ -290,6 +290,61 @@ html, body {
     color: var(--text-secondary);
 }
 
+/* Missed Days */
+.missed-days-container {
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    border-left: 4px solid var(--accent-color);
+}
+
+.missed-days-container.hidden {
+    display: none;
+}
+
+.missed-days-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.missed-days-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.missed-day-chip {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--accent-color);
+    background: transparent;
+    border: 1.5px solid var(--accent-color);
+    border-radius: 16px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.missed-day-chip:hover {
+    background: var(--accent-color);
+    color: white;
+}
+
+.missed-day-chip:active {
+    transform: scale(0.95);
+}
+
+.missed-more {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 /* Readings Card */
 .readings-card {
     background: var(--card-bg);

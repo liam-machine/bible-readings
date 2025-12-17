@@ -1,6 +1,6 @@
 // Bible Reading PWA - Service Worker
 
-const CACHE_NAME = 'bible-reading-v1';
+const CACHE_NAME = 'bible-reading-v2';
 const ASSETS_TO_CACHE = [
     '/bible-readings/',
     '/bible-readings/index.html',
