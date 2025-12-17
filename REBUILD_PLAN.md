@@ -19,7 +19,7 @@ This plan preserves the app's simplicity while adding real cross-device sync.
 | GitHub Pages hosting | Vercel (better PWA support, preview deploys) |
 | localStorage only | IndexedDB + Supabase sync |
 | URL-based sync (manual) | Automatic cloud sync |
-| No auth | Anonymous auth (seamless) |
+| No auth | Google OAuth (sign in with Gmail) |
 | Vanilla JS (no build) | Vite + Vanilla JS (fast builds, PWA plugin) |
 
 ---
@@ -54,7 +54,7 @@ This plan preserves the app's simplicity while adding real cross-device sync.
 │                        SUPABASE                              │
 │   ┌───────────────┐   ┌──────────────┐   ┌──────────────┐  │
 │   │ Auth Service  │   │  PostgreSQL  │   │     RLS      │  │
-│   │  (Anonymous)  │   │   Database   │   │  Policies    │  │
+│   │ (Google OAuth)│   │   Database   │   │  Policies    │  │
 │   └───────────────┘   └──────────────┘   └──────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -180,11 +180,12 @@ CREATE TRIGGER update_user_progress_updated_at
   EXECUTE FUNCTION update_updated_at();
 ```
 
-**Authentication: Anonymous Sign-In**
-- No email/password required
-- User gets unique ID instantly
-- Can upgrade to email later if desired
-- Perfect for personal tracker apps
+**Authentication: Google OAuth**
+- Sign in with existing Gmail account
+- Same Google account = same progress across all devices
+- No new password to remember
+- One tap on iOS with Safari (saved Google session)
+- Perfect for family/personal apps
 
 ---
 
@@ -423,12 +424,60 @@ async function mergeRemoteAndLocal(localDays, remoteDays) {
 
 ---
 
-## Part 5: Authentication
+## Part 5: Authentication (Google OAuth)
 
-### 5.1 Anonymous Auth Flow
+### 5.1 Why Google OAuth?
+
+| Benefit | Description |
+|---------|-------------|
+| **Cross-device sync** | Same Gmail = same progress everywhere |
+| **No new password** | Uses existing Google account |
+| **One tap on iOS** | Safari remembers Google session |
+| **Trusted auth** | Google handles security, 2FA, etc. |
+| **User identity** | Get name/email for personalization |
+
+### 5.2 Google Cloud Console Setup
+
+**Step 1: Create a Google Cloud Project**
+1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+2. Create new project: "Bible Reading Tracker"
+3. Enable the Google+ API (for OAuth)
+
+**Step 2: Configure OAuth Consent Screen**
+1. APIs & Services → OAuth consent screen
+2. User Type: **External**
+3. App name: "Bible Reading Tracker"
+4. User support email: your email
+5. Authorized domains: Add your Vercel domain
+6. Scopes: Just email and profile (defaults)
+7. Test users: Add your wife's Gmail for testing
+
+**Step 3: Create OAuth Credentials**
+1. APIs & Services → Credentials
+2. Create Credentials → OAuth client ID
+3. Application type: **Web application**
+4. Name: "Bible Reading PWA"
+5. Authorized JavaScript origins:
+   - `http://localhost:5173` (dev)
+   - `https://your-app.vercel.app` (prod)
+6. Authorized redirect URIs:
+   - `http://localhost:5173/auth/callback`
+   - `https://your-app.vercel.app/auth/callback`
+   - `https://<your-project>.supabase.co/auth/v1/callback`
+7. Copy **Client ID** and **Client Secret**
+
+### 5.3 Supabase Google Auth Setup
+
+**In Supabase Dashboard:**
+1. Authentication → Providers → Google
+2. Enable Google provider
+3. Paste Client ID and Client Secret from Google
+4. Copy the **Callback URL** shown (add to Google redirect URIs)
+
+### 5.4 Auth Implementation
 
 ```javascript
-// auth.js
+// src/sync/auth.js
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -436,38 +485,167 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-export async function initAuth() {
-  // Check for existing session
+// Check if user is already signed in
+export async function getSession() {
   const { data: { session } } = await supabase.auth.getSession();
-
-  if (session) {
-    return session.user;
-  }
-
-  // Create anonymous user
-  const { data, error } = await supabase.auth.signInAnonymously();
-  if (error) throw error;
-
-  return data.user;
+  return session;
 }
 
-// Optional: Upgrade to email later
-export async function upgradeAccount(email, password) {
-  return supabase.auth.updateUser({ email, password });
+// Sign in with Google
+export async function signInWithGoogle() {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${window.location.origin}/auth/callback`,
+      queryParams: {
+        prompt: 'select_account'  // Always show account picker
+      }
+    }
+  });
+
+  if (error) throw error;
+  return data;
+}
+
+// Sign out
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+// Listen for auth state changes
+export function onAuthStateChange(callback) {
+  return supabase.auth.onAuthStateChange((event, session) => {
+    callback(event, session);
+  });
+}
+
+// Get current user
+export async function getCurrentUser() {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user;
 }
 ```
 
-### 5.2 Security
+### 5.5 Auth Callback Handler
 
-**RLS protects data even with exposed anon key:**
-- Each user can only access their own data
-- Auth UID verified server-side
-- No admin operations possible with anon key
+```javascript
+// src/auth/callback.js (or handle in main.js)
+async function handleAuthCallback() {
+  // Supabase handles the OAuth callback automatically
+  // Just wait for the session to be established
+  const { data: { session }, error } = await supabase.auth.getSession();
 
-**Enable CAPTCHA for anonymous sign-ins:**
-- Supabase Dashboard → Auth → Providers
-- Enable Cloudflare Turnstile or hCaptcha
-- Prevents abuse
+  if (error) {
+    console.error('Auth callback error:', error);
+    window.location.href = '/?error=auth_failed';
+    return;
+  }
+
+  if (session) {
+    // Redirect to main app
+    window.location.href = '/';
+  }
+}
+```
+
+### 5.6 Login Screen UI
+
+```html
+<!-- Login screen shown when not authenticated -->
+<div id="login-screen" class="screen">
+  <div class="login-card">
+    <h1>📖 Bible Reading</h1>
+    <p>Sign in to sync your progress across all devices</p>
+
+    <button id="google-signin-btn" class="btn-google">
+      <svg><!-- Google G logo --></svg>
+      Continue with Google
+    </button>
+
+    <p class="privacy-note">
+      We only store your reading progress.<br>
+      Your data is private and secure.
+    </p>
+  </div>
+</div>
+```
+
+```css
+/* Google sign-in button styling */
+.btn-google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 24px;
+  font-size: 1rem;
+  font-weight: 500;
+  color: #333;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-google:hover {
+  background: #f8f8f8;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+```
+
+### 5.7 App Flow with Auth
+
+```
+USER OPENS APP
+      │
+      ▼
+┌─────────────────┐
+│ Check Session   │
+│ getSession()    │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │ Logged  │
+    │  In?    │
+    └────┬────┘
+    No   │   Yes
+     │   │    │
+     ▼   │    ▼
+┌────────┴─┐  ┌─────────────────┐
+│ Show     │  │ Show Reading    │
+│ Login    │  │ Screen          │
+│ Screen   │  │ + Sync Progress │
+└──────────┘  └─────────────────┘
+      │
+      │ Click "Sign in with Google"
+      ▼
+┌─────────────────┐
+│ Google OAuth    │
+│ Popup/Redirect  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Callback →      │
+│ Session Created │
+│ → Main App      │
+└─────────────────┘
+```
+
+### 5.8 Security Notes
+
+**RLS still protects data:**
+- Each user can only access rows where `user_id = auth.uid()`
+- Google OAuth provides verified user identity
+- No way to access other users' data
+
+**Privacy:**
+- Only email and profile name accessed from Google
+- No access to contacts, calendar, or other Google data
+- User can revoke access anytime via Google account settings
 
 ---
 
@@ -481,7 +659,12 @@ export async function upgradeAccount(email, password) {
 - [ ] Install dev deps: `npm install -D vite-plugin-pwa`
 - [ ] Create Supabase project at [supabase.com](https://supabase.com)
 - [ ] Run SQL schema migrations
-- [ ] Enable anonymous auth + CAPTCHA
+- [ ] **Google OAuth Setup:**
+  - [ ] Create Google Cloud project at [console.cloud.google.com](https://console.cloud.google.com)
+  - [ ] Configure OAuth consent screen (External, app name, scopes)
+  - [ ] Create OAuth credentials (Web app, get Client ID + Secret)
+  - [ ] Enable Google provider in Supabase Auth settings
+  - [ ] Add Supabase callback URL to Google redirect URIs
 - [ ] Create `.env.local` with Supabase keys
 
 ### Phase 2: Core Features (Days 2-3)
@@ -524,29 +707,54 @@ export async function upgradeAccount(email, password) {
 
 ```javascript
 // src/main.js
-import { initAuth } from './sync/auth.js';
+import { getSession, signInWithGoogle, onAuthStateChange } from './sync/auth.js';
 import { db } from './db/schema.js';
 import { SyncManager } from './sync/syncManager.js';
 import { App } from './app.js';
 
 async function init() {
-  // 1. Initialize auth
-  const user = await initAuth();
+  // 1. Check for existing Google session
+  const session = await getSession();
 
-  // 2. Check for URL sync (migration/fallback)
+  if (!session) {
+    // Show login screen
+    showLoginScreen();
+    document.getElementById('google-signin-btn')
+      .addEventListener('click', signInWithGoogle);
+    return;
+  }
+
+  // 2. User is authenticated - start the app
+  await startApp(session.user);
+}
+
+async function startApp(user) {
+  // Hide login, show app
+  hideLoginScreen();
+
+  // Check for URL sync (migration/fallback)
   const urlState = checkUrlSync();
   if (urlState) {
     await importFromUrl(urlState);
   }
 
-  // 3. Initialize sync manager
+  // Initialize sync manager
   const syncManager = new SyncManager(user.id);
   await syncManager.pullRemoteChanges();
 
-  // 4. Initialize app
+  // Initialize app
   const app = new App(syncManager);
   await app.init();
 }
+
+// Listen for auth changes (handles OAuth callback)
+onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_IN' && session) {
+    startApp(session.user);
+  } else if (event === 'SIGNED_OUT') {
+    showLoginScreen();
+  }
+});
 
 init().catch(console.error);
 ```
@@ -614,8 +822,12 @@ export async function getProgress(userId) {
 - [ ] Service worker caches all assets
 - [ ] IndexedDB persists across sessions
 
-### Sync Testing
-- [ ] Anonymous auth creates user
+### Auth & Sync Testing
+- [ ] Google sign-in button redirects to Google
+- [ ] OAuth callback creates session
+- [ ] User info (email, name) stored correctly
+- [ ] Same Google account works on multiple devices
+- [ ] Sign out clears session properly
 - [ ] Progress saves to Supabase
 - [ ] Progress loads from Supabase
 - [ ] Conflicts resolved correctly
@@ -654,27 +866,22 @@ export async function getProgress(userId) {
 
 Once the base rebuild is complete, consider:
 
-1. **Email Account Upgrade**
-   - Let users upgrade anonymous → email
-   - Adds password recovery
-   - More permanent identity
-
-2. **Real-time Sync**
+1. **Real-time Sync**
    - Supabase Realtime subscriptions
    - Instant cross-device updates
    - Live "reading together" feature?
 
-3. **Reading Notes**
+2. **Reading Notes**
    - Add notes per day
    - Store in Supabase
    - Search through notes
 
-4. **Multiple Reading Plans**
+3. **Multiple Reading Plans**
    - Add other plans (Chronological, etc.)
    - Let users switch plans
    - Track multiple concurrent plans
 
-5. **Social Features**
+4. **Social Features**
    - Reading groups
    - Share progress
    - Accountability partners
@@ -718,8 +925,13 @@ vercel --prod
 
 **Supabase:**
 - [Supabase Free Tier](https://supabase.com/pricing)
-- [Anonymous Auth Docs](https://supabase.com/docs/guides/auth/auth-anonymous)
+- [Google OAuth with Supabase](https://supabase.com/docs/guides/auth/social-login/auth-google)
 - [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
+
+**Google OAuth:**
+- [Google Cloud Console](https://console.cloud.google.com)
+- [OAuth 2.0 for Web Apps](https://developers.google.com/identity/protocols/oauth2/web-server)
+- [Configuring OAuth Consent](https://support.google.com/cloud/answer/10311615)
 
 **Architecture:**
 - [Offline-First PWA Patterns](https://web.dev/learn/pwa/offline-data/)
